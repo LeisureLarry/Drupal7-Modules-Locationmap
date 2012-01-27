@@ -16,4 +16,4 @@ Location map module is simple by design and will remain that way. It creates onl
 Duncan Babbage (http://wavelength.org.nz), maintainer since the 6.x version of gmaplocation.
 Bojan Mihelac (http://source.mihelac.org), original developer of gmaplocation module.
 Peter Anderson (http://panda.id.au), patch for blocks with interactive maps (http://drupal.org/node/1267562).
-Rupert Jabelman and Martin Švarc, patches/updates for the Google Maps API version 3 (http://drupal.org/node/1309766, http://drupal.org/node/275647)
+Rupert Jabelman and Martin Å varc, patches/updates for the Google Maps API version 3 (http://drupal.org/node/1309766, http://drupal.org/node/275647)
