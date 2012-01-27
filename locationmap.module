@@ -151,10 +151,11 @@ function locationmap_admin_settings($form, &$form_state) {
   $form['keys']['locationmap_key'] = array(
     '#type' => 'textfield',
     '#title' => t('API key'),
-    '#required' => TRUE,
+    '#required' => FALSE,
     '#default_value' => variable_get('locationmap_key', ''),
     '#description' => t('Google Maps key for your domain.') . " " .
-      t('Obtain key on !url', array('!url' => l('http://code.google.com/apis/maps/signup.html', 'http://code.google.com/apis/maps/signup.html')))
+      t('Obtain key on !url.', array('!url' => l('http://code.google.com/apis/maps/signup.html', 'http://code.google.com/apis/maps/signup.html'))) . " " .
+      t('The key is only needed for the old API version 2. If you want to use the faster version 3, don\'t enter a key.')
     );
   $form['#validate'][] = 'locationmap_admin_settings_validate';
 
@@ -184,6 +185,9 @@ function locationmap_admin_settings_validate($form, &$form_state) {
           $form_state['values']['locationmap_lat'] = '-46.0868686';
           $form_state['values']['locationmap_lng'] = '166.6822074';
           drupal_set_message('Unable to Geocode address provided. As no previous coordinates were recorded, default values have been inserted. Try slightly modifying the address and resubmit, e.g. giving more or less detail, such as leaving out the suburb or state.', 'warning');
+          if (!ini_get('allow_url_fopen')) {
+            drupal_set_message('Your webserver doesn\'t allow url_fopen. Please enter your coordinates manually.', 'warning');
+          }
           break;
           // If Geocoding fails and there are previous coordinates, set to those coordinates.
         default:
@@ -209,6 +213,22 @@ function locationmap_permission() {
 }
 
 /**
+ * Translates types for Google Maps API V3
+ */
+function locationmap_get_type($gmap_key) {
+  $type = variable_get('locationmap_type', 'G_NORMAL_MAP');
+  if (empty($gmap_key)) {
+    $translate = array(
+      'G_NORMAL_MAP' => 'ROADMAP',
+      'G_SATELLITE_MAP' => 'SATELLITE',
+      'G_HYBRID_MAP' => 'HYBRID',
+    );
+    $type = $translate[$type];
+  }
+  return $type;
+}
+
+/**
  * Menu callback; generate a page with Google Maps.
  */
 function locationmap_page() {
@@ -217,15 +237,20 @@ function locationmap_page() {
   $locationmap_footer = variable_get('locationmap_footer');
   $path = drupal_get_path('module', 'locationmap');
   $gmap_key = variable_get('locationmap_key');
-  drupal_add_js('http://maps.google.com/maps?file=api&hl=en&v=2&key=' . $gmap_key,  array('type' => 'external', 'weight' => 5));
-  drupal_add_js($path . '/locationmap.js', array('type' => 'file', 'weight' => 6, 'scope' => 'footer'));
+  if (!empty($gmap_key)) {
+    drupal_add_js('http://maps.google.com/maps?file=api&hl=en&v=2&key=' . $gmap_key,  array('type' => 'external', 'weight' => 5));
+    drupal_add_js($path . '/locationmap.js', array('type' => 'file', 'weight' => 6, 'scope' => 'footer'));
+  } else {
+    drupal_add_js('http://maps.google.com/maps/api/js?v=3&sensor=false',  array('type' => 'external', 'weight' => 5));
+    drupal_add_js($path . '/locationmap_v3.js', array('type' => 'file', 'weight' => 6, 'scope' => 'footer'));
+  }
   $locationmap_settings = array(
     'address' => variable_get('locationmap_address', 'Fiordland, New Zealand'),
     'info' => variable_get('locationmap_info', 'Fiordland, New Zealand'),
     'lat' => variable_get('locationmap_lat', '-46.0868686'),
     'lng' => variable_get('locationmap_lng', '166.6822074'),
     'zoom' => variable_get('locationmap_zoom', 10),
-    'type' => variable_get('locationmap_type', 'G_NORMAL_MAP'),
+    'type' => locationmap_get_type($gmap_key),
     'admin' => user_access('administer locationmap'),
   );
   if (!$locationmap_settings['info']) {
@@ -254,7 +279,11 @@ function locationmap_geocode_for_address($address) {
     return (FALSE);
   }
   $address = urlencode($address);
-  $url = "http://maps.google.com/maps/geo?q=$address&key=$gmap_key&output=csv";
+  if (!empty($gmap_key)) {
+    $url = "http://maps.google.com/maps/geo?q=$address&key=$gmap_key&output=csv";
+  } else {
+    $url = "http://maps.google.com/maps/geo?q=$address&output=csv";
+  }
   $options = array(
     'http' => array(
       'max_redirects' => 10,
@@ -333,7 +362,7 @@ function locationmap_simpletest() {
  * Implements hook_block_info().
  */
 function locationmap_block_info() {
-  $blocks['image']['info'] = t('Location Map static image block');
+  $blocks['image']['info'] = t('Location Map block');
   return $blocks;
 }
 
@@ -344,6 +373,16 @@ function locationmap_block_configure($delta) {
   $form = array();
   switch ($delta) {
     case 'image':
+      $form['info']['locationmap_block_type'] = array(
+        '#type' => 'radios',
+        '#title' => t('Map type'),
+        '#description' => t("Select the type of map you'd like this block to display."),
+        '#default_value' => variable_get('locationmap_block_type', 'image'),
+        '#options' => array(
+          'image' => t('Static image'),
+          'interactive' => t('Interactive map'),
+        ),
+      );
       $form['info']['locationmap_block_mapwidth'] = array(
         '#type' => 'textfield',
         '#title' => t('Block map width'),
@@ -379,6 +418,7 @@ function locationmap_block_configure($delta) {
 function locationmap_block_save($delta, $edit) {
   switch ($delta) {
     case 'image':
+      variable_set('locationmap_block_type', $edit['locationmap_block_type']);
       variable_set('locationmap_block_mapheight', (int)$edit['locationmap_block_mapheight']);
       variable_set('locationmap_block_mapwidth', (int)$edit['locationmap_block_mapwidth']);
       variable_set('locationmap_block_text_top', $edit['locationmap_text_top']['value']);
@@ -407,10 +447,15 @@ function locationmap_block_view($delta) {
  * @see http://drupal.org/node/1354
  */
 function locationmap_static_image_url($w = 200, $h = 150) {
+  $gmap_key = variable_get('locationmap_key', NULL);
+  
   $image_url = 'http://maps.google.com/staticmap?zoom=' . variable_get('locationmap_zoom', 5);
   $image_url .= "&amp;size={$w}x{$h}";
   $image_url .= '&amp;markers=' . variable_get('locationmap_lat', 0) . ',' . variable_get('locationmap_lng', 0);
-  $image_url .= '&amp;key=' . variable_get('locationmap_key', NULL);
+  if (!empty($gmap_key)) {
+    $image_url .= '&amp;key=' . $gmap_key;
+  }
+  $image_url .= '&amp;sensor=false';
   return($image_url);
 }
 
@@ -419,9 +464,40 @@ function locationmap_static_image_url($w = 200, $h = 150) {
  * @see http://drupal.org/node/1354
  */
 function locationmap_block_image() {
+  $type = variable_get('locationmap_block_type', 'image');
+  $gmap_key = variable_get('locationmap_key', NULL);
   $block = array();
   $block['subject'] = variable_get('locationmap_title', t('Our Location'));
-  $block['content'] = theme('locationmap_block_image_link');
+
+  if ($type == 'interactive') {
+    $width = variable_get('locationmap_block_mapwidth', 160);
+    $height = variable_get('locationmap_block_mapheight', 120);
+    $path = drupal_get_path('module', 'locationmap');
+    if (!empty($gmap_key)) {
+      drupal_add_js('http://maps.google.com/maps?file=api&hl=en&v=2&key=' . $gmap_key,  array('type' => 'external', 'weight' => 5));
+      drupal_add_js($path . '/locationmap.js', array('type' => 'file', 'weight' => 6, 'scope' => 'footer'));
+    } else {
+      drupal_add_js('http://maps.google.com/maps/api/js?v=3&sensor=false',  array('type' => 'external', 'weight' => 5));
+      drupal_add_js($path . '/locationmap_v3.js', array('type' => 'file', 'weight' => 6, 'scope' => 'footer'));
+    }
+    $locationmap_settings = array(
+      'address' => variable_get('locationmap_address', 'Fiordland, New Zealand'),
+      'info' => variable_get('locationmap_info', 'Fiordland, New Zealand'),
+      'lat' => variable_get('locationmap_lat', '-46.0868686'),
+      'lng' => variable_get('locationmap_lng', '166.6822074'),
+      'zoom' => variable_get('locationmap_zoom', 10),
+      'type' => locationmap_get_type($gmap_key),
+      'admin' => user_access('administer locationmap'),
+    );
+    if (!$locationmap_settings['info']) {
+      $locationmap_settings['info'] = $locationmap_settings['address'];
+    }
+    drupal_add_js(array('locationmap' => $locationmap_settings), 'setting');
+    $block['content'] = theme('locationmap_map', array('width' => $width, 'height' => $height));
+  } else {
+    $block['content'] = theme('locationmap_block_image_link');
+  }
+
   return($block);
 }
 
@@ -440,9 +516,18 @@ function theme_locationmap_block_image_link() {
  *
  * @ingroup themeable
  */
-function theme_locationmap_map() {
-  $width = variable_get('locationmap_width', '500') . 'px';
-  $height = variable_get('locationmap_height', '500') . 'px';
+function theme_locationmap_map($variables) {
+  if (empty($variables['width'])) {
+    $width = variable_get('locationmap_width', '500') . 'px';
+  } else {
+    $width = $variables['width'] . 'px';
+  }
+  if (empty($variables['height'])) {
+    $height = variable_get('locationmap_height', '500') . 'px';
+  } else {
+    $height = $variables['height'] . 'px';
+  }
+
   return ('<div id="locationmap_map" style="width: ' . $width . '; height: ' . $height . '"></div>');
 }
 
@@ -452,6 +537,11 @@ function theme_locationmap_map() {
 function locationmap_theme() {
   return array(
     'locationmap_block_image_link' => array(),
-    'locationmap_map' => array(),
+    'locationmap_map' => array(
+      'variables' => array(
+        'width' => NULL,
+        'height' => NULL,
+      ),
+    ),
   );
 }
